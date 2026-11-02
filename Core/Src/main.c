@@ -18,6 +18,7 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
+#include "fatfs.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -45,11 +46,15 @@
 DAC_HandleTypeDef hdac;
 DMA_HandleTypeDef hdma_dac1;
 
+SD_HandleTypeDef hsd;
+
 TIM_HandleTypeDef htim6;
 
 /* USER CODE BEGIN PV */
 
 static uint16_t dac_samples[48];
+volatile FRESULT sd_mount_result = FR_NOT_READY;
+volatile uint8_t sd_mount_done = 0;
 
 /* USER CODE END PV */
 
@@ -59,6 +64,7 @@ static void MX_GPIO_Init(void);
 static void MX_DMA_Init(void);
 static void MX_DAC_Init(void);
 static void MX_TIM6_Init(void);
+static void MX_SDIO_SD_Init(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
@@ -74,7 +80,6 @@ static void MX_TIM6_Init(void);
   */
 int main(void)
 {
-
   /* USER CODE BEGIN 1 */
 
   /* USER CODE END 1 */
@@ -83,7 +88,6 @@ int main(void)
 
   /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
   HAL_Init();
-
   /* USER CODE BEGIN Init */
 
   /* USER CODE END Init */
@@ -100,6 +104,8 @@ int main(void)
   MX_DMA_Init();
   MX_DAC_Init();
   MX_TIM6_Init();
+  MX_SDIO_SD_Init();
+  MX_FATFS_Init();
   /* USER CODE BEGIN 2 */
 
 
@@ -112,7 +118,8 @@ int main(void)
     dac_samples[i] =
         (uint16_t)(2048.0f + 1024.0f * sinf(phase) + 0.5f);
   }
-
+  sd_mount_result = f_mount(&SDFatFS, SDPath, 1);
+  sd_mount_done = 1;
   if (HAL_DAC_Start_DMA(&hdac,
                         DAC_CHANNEL_1,
                         (uint32_t *)dac_samples,
@@ -141,14 +148,36 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-	    HAL_DAC_SetValue(&hdac, DAC_CHANNEL_1, DAC_ALIGN_12B_R, 1024);
-	    HAL_Delay(10);
 
-	    HAL_DAC_SetValue(&hdac, DAC_CHANNEL_1, DAC_ALIGN_12B_R, 3072);
-	    HAL_Delay(10);
-
+	  if (sd_mount_done && sd_mount_result == FR_OK)
+	  {
+	    /* Montowanie udane: dioda świeci stale */
+	    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_2, GPIO_PIN_SET);
+	    HAL_Delay(20);
+	  }
+	  else
+	  {
+	    /* Montowanie nieudane: dioda miga */
 	    HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_2);
-  	  	HAL_Delay(500);
+	    HAL_Delay(200);
+	  }
+
+	  //    GPIO_PinState detect = HAL_GPIO_ReadPin(
+//        SD_DETECT_GPIO_Port, SD_DETECT_Pin);
+//
+//    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_2,
+//        //(detect == GPIO_PIN_RESET) ? GPIO_PIN_SET : GPIO_PIN_RESET);
+//    	(detect == GPIO_PIN_SET) ? GPIO_PIN_SET : GPIO_PIN_RESET);
+//
+//    HAL_Delay(20);
+
+    // Stary test DAC:
+    // HAL_DAC_SetValue(&hdac, DAC_CHANNEL_1, DAC_ALIGN_12B_R, 1024);
+    // HAL_Delay(10);
+    // HAL_DAC_SetValue(&hdac, DAC_CHANNEL_1, DAC_ALIGN_12B_R, 3072);
+    // HAL_Delay(10);
+    // HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_2);
+    // HAL_Delay(500);
   }
   /* USER CODE END 3 */
 }
@@ -177,7 +206,7 @@ void SystemClock_Config(void)
   RCC_OscInitStruct.PLL.PLLM = 8;
   RCC_OscInitStruct.PLL.PLLN = 336;
   RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV2;
-  RCC_OscInitStruct.PLL.PLLQ = 4;
+  RCC_OscInitStruct.PLL.PLLQ = 7;
   if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
   {
     Error_Handler();
@@ -235,6 +264,34 @@ static void MX_DAC_Init(void)
   /* USER CODE BEGIN DAC_Init 2 */
 
   /* USER CODE END DAC_Init 2 */
+
+}
+
+/**
+  * @brief SDIO Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_SDIO_SD_Init(void)
+{
+
+  /* USER CODE BEGIN SDIO_Init 0 */
+
+  /* USER CODE END SDIO_Init 0 */
+
+  /* USER CODE BEGIN SDIO_Init 1 */
+
+  /* USER CODE END SDIO_Init 1 */
+  hsd.Instance = SDIO;
+  hsd.Init.ClockEdge = SDIO_CLOCK_EDGE_RISING;
+  hsd.Init.ClockBypass = SDIO_CLOCK_BYPASS_DISABLE;
+  hsd.Init.ClockPowerSave = SDIO_CLOCK_POWER_SAVE_DISABLE;
+  hsd.Init.BusWide = SDIO_BUS_WIDE_1B;
+  hsd.Init.HardwareFlowControl = SDIO_HARDWARE_FLOW_CONTROL_DISABLE;
+  hsd.Init.ClockDiv = 4;
+  /* USER CODE BEGIN SDIO_Init 2 */
+
+  /* USER CODE END SDIO_Init 2 */
 
 }
 
@@ -308,6 +365,8 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOH_CLK_ENABLE();
   __HAL_RCC_GPIOA_CLK_ENABLE();
   __HAL_RCC_GPIOB_CLK_ENABLE();
+  __HAL_RCC_GPIOC_CLK_ENABLE();
+  __HAL_RCC_GPIOD_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOB, GPIO_PIN_2, GPIO_PIN_RESET);
@@ -318,6 +377,12 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : SD_DETECT_Pin */
+  GPIO_InitStruct.Pin = SD_DETECT_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
+  HAL_GPIO_Init(SD_DETECT_GPIO_Port, &GPIO_InitStruct);
 
   /* USER CODE BEGIN MX_GPIO_Init_2 */
 
