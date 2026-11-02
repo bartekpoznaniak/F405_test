@@ -24,6 +24,7 @@
 /* USER CODE BEGIN Includes */
 
 #include <math.h>
+#include <stdio.h>
 
 /* USER CODE END Includes */
 
@@ -50,6 +51,8 @@ SD_HandleTypeDef hsd;
 
 TIM_HandleTypeDef htim6;
 
+UART_HandleTypeDef huart2;
+
 /* USER CODE BEGIN PV */
 
 static uint16_t dac_samples[48];
@@ -65,12 +68,28 @@ static void MX_DMA_Init(void);
 static void MX_DAC_Init(void);
 static void MX_TIM6_Init(void);
 static void MX_SDIO_SD_Init(void);
+static void MX_USART2_UART_Init(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+
+/* USER CODE BEGIN 0 */
+
+int __io_putchar(int ch)
+{
+  uint8_t byte = (uint8_t)ch;
+  if (HAL_UART_Transmit(&huart2, &byte, 1, 100) != HAL_OK)
+  {
+    return -1;
+  }
+  return ch;
+}
+
+/* USER CODE END 0 */
+
 
 /* USER CODE END 0 */
 
@@ -80,6 +99,7 @@ static void MX_SDIO_SD_Init(void);
   */
 int main(void)
 {
+
   /* USER CODE BEGIN 1 */
 
   /* USER CODE END 1 */
@@ -88,6 +108,7 @@ int main(void)
 
   /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
   HAL_Init();
+
   /* USER CODE BEGIN Init */
 
   /* USER CODE END Init */
@@ -106,8 +127,14 @@ int main(void)
   MX_TIM6_Init();
   MX_SDIO_SD_Init();
   MX_FATFS_Init();
+  MX_USART2_UART_Init();
   /* USER CODE BEGIN 2 */
 
+  printf("STM32F405 printf OK\r\n");
+  fflush(stdout);
+
+//  uint8_t uart_test[] = "STM32F405 UART OK\r\n";
+//  HAL_UART_Transmit(&huart2, uart_test, sizeof(uart_test) - 1, 100);
 
 
   /* Pierwsza połowa okresu: niski poziom, druga: wysoki */
@@ -118,8 +145,42 @@ int main(void)
     dac_samples[i] =
         (uint16_t)(2048.0f + 1024.0f * sinf(phase) + 0.5f);
   }
+  printf("Przed f_mount\r\n");
+  fflush(stdout);
   sd_mount_result = f_mount(&SDFatFS, SDPath, 1);
   sd_mount_done = 1;
+  printf("SD mount: %d\r\n", (int)sd_mount_result);
+  fflush(stdout);
+
+  if (sd_mount_result == FR_OK)
+  {
+    FIL test_file;
+    char text[128];
+    UINT bytes_read = 0;
+    FRESULT result;
+
+    result = f_open(&test_file, "TEST.TXT", FA_READ);
+    printf("TEST.TXT open: %d\r\n", (int)result);
+    fflush(stdout);
+
+    if (result == FR_OK)
+    {
+      result = f_read(&test_file, text, sizeof(text) - 1, &bytes_read);
+      printf("TEST.TXT read: %d, bytes: %u\r\n",
+             (int)result, (unsigned int)bytes_read);
+
+      if (result == FR_OK)
+      {
+        text[bytes_read] = '\0';
+        printf("Tresc: %s\r\n", text);
+      }
+
+      result = f_close(&test_file);
+      printf("TEST.TXT close: %d\r\n", (int)result);
+      fflush(stdout);
+    }
+  }
+
   if (HAL_DAC_Start_DMA(&hdac,
                         DAC_CHANNEL_1,
                         (uint32_t *)dac_samples,
@@ -330,6 +391,39 @@ static void MX_TIM6_Init(void)
   /* USER CODE BEGIN TIM6_Init 2 */
 
   /* USER CODE END TIM6_Init 2 */
+
+}
+
+/**
+  * @brief USART2 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_USART2_UART_Init(void)
+{
+
+  /* USER CODE BEGIN USART2_Init 0 */
+
+  /* USER CODE END USART2_Init 0 */
+
+  /* USER CODE BEGIN USART2_Init 1 */
+
+  /* USER CODE END USART2_Init 1 */
+  huart2.Instance = USART2;
+  huart2.Init.BaudRate = 115200;
+  huart2.Init.WordLength = UART_WORDLENGTH_8B;
+  huart2.Init.StopBits = UART_STOPBITS_1;
+  huart2.Init.Parity = UART_PARITY_NONE;
+  huart2.Init.Mode = UART_MODE_TX_RX;
+  huart2.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+  huart2.Init.OverSampling = UART_OVERSAMPLING_16;
+  if (HAL_UART_Init(&huart2) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN USART2_Init 2 */
+
+  /* USER CODE END USART2_Init 2 */
 
 }
 
