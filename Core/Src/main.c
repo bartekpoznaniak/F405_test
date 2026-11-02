@@ -102,7 +102,7 @@ int main(void)
   MX_TIM6_Init();
   /* USER CODE BEGIN 2 */
 
-  /* USER CODE BEGIN 2 */
+
 
   /* Pierwsza połowa okresu: niski poziom, druga: wysoki */
   for (uint32_t i = 0; i < 48; i++)
@@ -127,7 +127,7 @@ int main(void)
     Error_Handler();
   }
 
-  /* USER CODE END 2 */
+
 
 //  HAL_DAC_Start(&hdac, DAC_CHANNEL_1);
 //  HAL_DAC_SetValue(&hdac, DAC_CHANNEL_1, DAC_ALIGN_12B_R, 2048);
