@@ -160,8 +160,11 @@ static FRESULT audio_start(const char *path)
     }
 
     res = f_read(&wav_file, audio_buffer,
-                 AUDIO_HALF_SAMPLES * 2, &br);
-    if (res != FR_OK || br != AUDIO_HALF_SAMPLES * 2)
+                 sizeof(audio_buffer), &br);
+    if (res != FR_OK || br != sizeof(audio_buffer))
+//    res = f_read(&wav_file, audio_buffer,
+//                 AUDIO_HALF_SAMPLES * 2, &br);
+//    if (res != FR_OK || br != AUDIO_HALF_SAMPLES * 2)
     {
         f_close(&wav_file);
         return FR_INVALID_OBJECT;
