@@ -46,18 +46,23 @@
 /* Private variables ---------------------------------------------------------*/
 DAC_HandleTypeDef hdac;
 DMA_HandleTypeDef hdma_dac1;
-
 SD_HandleTypeDef hsd;
-
 TIM_HandleTypeDef htim6;
-
 UART_HandleTypeDef huart2;
-
 /* USER CODE BEGIN PV */
 
 static uint16_t dac_samples[48];
 volatile FRESULT sd_mount_result = FR_NOT_READY;
 volatile uint8_t sd_mount_done = 0;
+
+#define AUDIO_BUFFER_SAMPLES 1024
+#define AUDIO_HALF_SAMPLES   (AUDIO_BUFFER_SAMPLES / 2)
+
+static uint16_t audio_buffer[AUDIO_BUFFER_SAMPLES];
+static FIL wav_file;
+static volatile uint8_t audio_half_ready = 0;
+static volatile uint8_t audio_running = 0;
+static uint32_t wav_data_bytes_left = 0;
 
 /* USER CODE END PV */
 
@@ -76,7 +81,7 @@ static void MX_USART2_UART_Init(void);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
-/* USER CODE BEGIN 0 */
+
 
 int __io_putchar(int ch)
 {
@@ -88,10 +93,115 @@ int __io_putchar(int ch)
   return ch;
 }
 
+static FRESULT audio_open_wav(const char *path)
+{
+    FRESULT res;
+    UINT br;
+    uint8_t header[44];
+
+    res = f_open(&wav_file, path, FA_READ);
+    if (res != FR_OK)
+    {
+        return res;
+    }
+
+    res = f_read(&wav_file, header, sizeof(header), &br);
+    if (res != FR_OK || br != sizeof(header))
+    {
+        f_close(&wav_file);
+        return FR_INVALID_OBJECT;
+    }
+
+    if (header[0] != 'R' || header[1] != 'I' ||
+        header[2] != 'F' || header[3] != 'F' ||
+        header[8] != 'W' || header[9] != 'A' ||
+        header[10] != 'V' || header[11] != 'E')
+    {
+        f_close(&wav_file);
+        return FR_INVALID_OBJECT;
+    }
+
+    uint16_t channels = (uint16_t)(header[22] | (header[23] << 8));
+    uint32_t sample_rate = (uint32_t)header[24] |
+                           ((uint32_t)header[25] << 8) |
+                           ((uint32_t)header[26] << 16) |
+                           ((uint32_t)header[27] << 24);
+    uint16_t bits = (uint16_t)(header[34] | (header[35] << 8));
+
+    printf("WAV: ch=%u rate=%lu bits=%u\r\n",
+           (unsigned int)channels,
+           (unsigned long)sample_rate,
+           (unsigned int)bits);
+    fflush(stdout);
+
+    if (channels != 1 || bits != 16 || sample_rate != 44100)
+    {
+        f_close(&wav_file);
+        return FR_INVALID_PARAMETER;
+    }
+
+    wav_data_bytes_left = (uint32_t)header[40] |
+                          ((uint32_t)header[41] << 8) |
+                          ((uint32_t)header[42] << 16) |
+                          ((uint32_t)header[43] << 24);
+
+    return FR_OK;
+}
+
+static FRESULT audio_start(const char *path)
+{
+    FRESULT res;
+    UINT br;
+
+    res = audio_open_wav(path);
+    if (res != FR_OK)
+    {
+        return res;
+    }
+
+    res = f_read(&wav_file, audio_buffer,
+                 AUDIO_HALF_SAMPLES * 2, &br);
+    if (res != FR_OK || br != AUDIO_HALF_SAMPLES * 2)
+    {
+        f_close(&wav_file);
+        return FR_INVALID_OBJECT;
+    }
+
+    for (uint32_t i = 0; i < br / 2U; i++)
+    {
+        int32_t sample = (int16_t)audio_buffer[i];
+        audio_buffer[i] = (uint16_t)((sample + 32768) >> 4);
+    }
+
+    wav_data_bytes_left -= br;
+
+
+
+
+    if (HAL_DAC_Start_DMA(&hdac,
+                          DAC_CHANNEL_1,
+                          (uint32_t *)audio_buffer,
+                          AUDIO_BUFFER_SAMPLES,
+                          DAC_ALIGN_12B_R) != HAL_OK)
+    {
+        f_close(&wav_file);
+        return FR_INVALID_NAME;   /* DAC Start_DMA failed */
+    }
+
+    if (HAL_TIM_Base_Start(&htim6) != HAL_OK)
+    {
+        HAL_DAC_Stop_DMA(&hdac, DAC_CHANNEL_1);
+        f_close(&wav_file);
+        return FR_INVALID_DRIVE;  /* TIM6 start failed */
+    }
+
+    audio_running = 1;
+    return FR_OK;
+}
 /* USER CODE END 0 */
 
 
-/* USER CODE END 0 */
+
 
 /**
   * @brief  The application entry point.
@@ -133,18 +243,6 @@ int main(void)
   printf("STM32F405 printf OK\r\n");
   fflush(stdout);
 
-//  uint8_t uart_test[] = "STM32F405 UART OK\r\n";
-//  HAL_UART_Transmit(&huart2, uart_test, sizeof(uart_test) - 1, 100);
-
-
-  /* Pierwsza połowa okresu: niski poziom, druga: wysoki */
-  for (uint32_t i = 0; i < 48; i++)
-  {
-    float phase = 2.0f * 3.14159265f * (float)i / 48.0f;
-
-    dac_samples[i] =
-        (uint16_t)(2048.0f + 1024.0f * sinf(phase) + 0.5f);
-  }
   printf("Przed f_mount\r\n");
   fflush(stdout);
   sd_mount_result = f_mount(&SDFatFS, SDPath, 1);
@@ -181,24 +279,11 @@ int main(void)
     }
   }
 
-  if (HAL_DAC_Start_DMA(&hdac,
-                        DAC_CHANNEL_1,
-                        (uint32_t *)dac_samples,
-                        48,
-                        DAC_ALIGN_12B_R) != HAL_OK)
-  {
-    Error_Handler();
-  }
+  FRESULT wav_result = audio_start("SHOT.WAV");
+  htim6.Instance->ARR = 1904;
+  printf("WAV start: %d\r\n", (int)wav_result);
+  fflush(stdout);
 
-  if (HAL_TIM_Base_Start(&htim6) != HAL_OK)
-  {
-    Error_Handler();
-  }
-
-
-
-//  HAL_DAC_Start(&hdac, DAC_CHANNEL_1);
-//  HAL_DAC_SetValue(&hdac, DAC_CHANNEL_1, DAC_ALIGN_12B_R, 2048);
 
   /* USER CODE END 2 */
 
@@ -210,11 +295,77 @@ int main(void)
 
     /* USER CODE BEGIN 3 */
 
+
+	  if (audio_running)
+	  {
+	      if (audio_half_ready != 0)
+	      {
+	          uint16_t *target;
+	          uint32_t bytes_to_read;
+	          UINT br = 0;
+
+	          if (audio_half_ready == 1)
+	          {
+	              target = &audio_buffer[0];
+	          }
+	          else
+	          {
+	              target = &audio_buffer[AUDIO_HALF_SAMPLES];
+	          }
+
+	          audio_half_ready = 0;
+
+	          bytes_to_read = AUDIO_HALF_SAMPLES * 2;
+
+	          if (wav_data_bytes_left < bytes_to_read)
+	          {
+	              bytes_to_read = wav_data_bytes_left;
+	          }
+
+	          if (bytes_to_read > 0)
+	          {
+
+	        	  if (f_read(&wav_file, target,
+	        	             bytes_to_read, &br) == FR_OK)
+	        	  {
+	        	      for (uint32_t i = 0; i < br / 2U; i++)
+	        	      {
+	        	          int32_t sample = (int16_t)target[i];
+	        	          target[i] = (uint16_t)((sample + 32768) >> 4);
+	        	      }
+
+	        	      wav_data_bytes_left -= br;
+	        	  }
+
+//	              if (f_read(&wav_file, target,
+//	                         bytes_to_read, &br) == FR_OK)
+//	              {
+//	                  wav_data_bytes_left -= br;
+//	              }
+	          }
+
+	          if (wav_data_bytes_left == 0)
+	          {
+	              HAL_TIM_Base_Stop(&htim6);
+	              HAL_DAC_Stop_DMA(&hdac, DAC_CHANNEL_1);
+	              f_close(&wav_file);
+	              audio_running = 0;
+
+	              printf("WAV done\r\n");
+	              fflush(stdout);
+	          }
+	      }
+	  }
+
+
+
 	  if (sd_mount_done && sd_mount_result == FR_OK)
 	  {
 	    /* Montowanie udane: dioda świeci stale */
-	    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_2, GPIO_PIN_SET);
-	    HAL_Delay(20);
+		HAL_GPIO_WritePin(GPIOB, GPIO_PIN_2, GPIO_PIN_SET);
+
+//		HAL_GPIO_WritePin(GPIOB, GPIO_PIN_2, GPIO_PIN_SET);
+//	    HAL_Delay(20);
 	  }
 	  else
 	  {
@@ -223,22 +374,6 @@ int main(void)
 	    HAL_Delay(200);
 	  }
 
-	  //    GPIO_PinState detect = HAL_GPIO_ReadPin(
-//        SD_DETECT_GPIO_Port, SD_DETECT_Pin);
-//
-//    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_2,
-//        //(detect == GPIO_PIN_RESET) ? GPIO_PIN_SET : GPIO_PIN_RESET);
-//    	(detect == GPIO_PIN_SET) ? GPIO_PIN_SET : GPIO_PIN_RESET);
-//
-//    HAL_Delay(20);
-
-    // Stary test DAC:
-    // HAL_DAC_SetValue(&hdac, DAC_CHANNEL_1, DAC_ALIGN_12B_R, 1024);
-    // HAL_Delay(10);
-    // HAL_DAC_SetValue(&hdac, DAC_CHANNEL_1, DAC_ALIGN_12B_R, 3072);
-    // HAL_Delay(10);
-    // HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_2);
-    // HAL_Delay(500);
   }
   /* USER CODE END 3 */
 }
@@ -484,7 +619,21 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+void HAL_DAC_ConvHalfCpltCallbackCh1(DAC_HandleTypeDef *hdac)
+{
+    if (hdac->Instance == DAC)
+    {
+        audio_half_ready = 1;
+    }
+}
 
+void HAL_DAC_ConvCpltCallbackCh1(DAC_HandleTypeDef *hdac)
+{
+    if (hdac->Instance == DAC)
+    {
+        audio_half_ready = 2;
+    }
+}
 /* USER CODE END 4 */
 
 /**
